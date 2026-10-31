@@ -1,0 +1,501 @@
+openapi: 3.0.3
+info:
+  title: CodeTrace API
+  version: 0.1.0
+  description: Contract for evidence-backed explanations of repository history.
+servers:
+  - url: http://localhost:8000
+paths:
+  /health:
+    get:
+      operationId: health
+      responses:
+        '200':
+          description: Backend readiness and configured optional dependencies
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, dependencies]
+                properties:
+                  status: {type: string, enum: [ok]}
+                  dependencies: {type: object, additionalProperties: {type: string, enum: [ok, configured, unconfigured, not_checked]}}
+  /v1/repositories:
+    get:
+      operationId: listRepositories
+      responses:
+        '200':
+          description: Connected repositories
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepositoryList'
+    post:
+      operationId: createRepository
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRepositoryRequest'
+      responses:
+        '201':
+          description: Repository registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Repository'
+  /v1/repositories/{repository_id}/ingestion-jobs:
+    post:
+      operationId: createIngestionJob
+      parameters:
+        - $ref: '#/components/parameters/RepositoryId'
+      responses:
+        '202':
+          description: Ingestion accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestionJob'
+  /v1/ingestion-jobs/{job_id}:
+    get:
+      operationId: getIngestionJob
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Ingestion progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestionJob'
+  /v1/repositories/{repository_id}/questions:
+    post:
+      operationId: askQuestion
+      parameters:
+        - $ref: '#/components/parameters/RepositoryId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestionRequest'
+      responses:
+        '200':
+          description: Evidence-backed answer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Answer'
+  /v1/repositories/{repository_id}/retrieval:
+    post:
+      operationId: retrieveEvidence
+      parameters:
+        - $ref: '#/components/parameters/RepositoryId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestionRequest'
+      responses:
+        '200':
+          description: Ranked evidence and graph context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetrievalResult'
+  /v1/repositories/{repository_id}/decisions:
+    get:
+      operationId: listDecisions
+      parameters:
+        - $ref: '#/components/parameters/RepositoryId'
+      responses:
+        '200':
+          description: Evidence-backed decision candidates and temporal assessments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionList'
+  /v1/repositories/{repository_id}/evidence:
+    get:
+      operationId: listEvidence
+      parameters:
+        - $ref: '#/components/parameters/RepositoryId'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Evidence items
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvidenceList'
+  /v1/repositories/{repository_id}/graph:
+    get:
+      operationId: getGraph
+      parameters:
+        - $ref: '#/components/parameters/RepositoryId'
+        - name: node_type
+          in: query
+          required: false
+          schema: {type: array, items: {type: string}}
+        - name: depth
+          in: query
+          required: false
+          schema: {type: integer, minimum: 0, maximum: 3, default: 1}
+        - name: limit
+          in: query
+          required: false
+          schema: {type: integer, minimum: 1, maximum: 250, default: 100}
+      responses:
+        '200':
+          description: Knowledge graph slice
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Graph'
+  /v1/repositories/{repository_id}/timeline:
+    get:
+      operationId: getTimeline
+      parameters:
+        - $ref: '#/components/parameters/RepositoryId'
+      responses:
+        '200':
+          description: Decision timeline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TimelineList'
+components:
+  parameters:
+    RepositoryId:
+      name: repository_id
+      in: path
+      required: true
+      schema: {type: string}
+    JobId:
+      name: job_id
+      in: path
+      required: true
+      schema: {type: string}
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema: {type: string}
+  schemas:
+    Timestamp:
+      type: string
+      format: date-time
+      description: RFC 3339 UTC timestamp with explicit Z suffix.
+    EvidenceStrength:
+      type: string
+      enum: [strong, partial, insufficient, conflicting]
+    AnswerStatus:
+      type: string
+      enum: [supported, partially_supported, insufficient_evidence, conflicting_evidence]
+    SourceType:
+      type: string
+      enum: [commit, pull_request, issue, comment, discussion, documentation, incident, code_change, code_excerpt, decision_record]
+    Repository:
+      type: object
+      required: [id, full_name, default_branch, index_status]
+      properties:
+        id: {type: string}
+        full_name: {type: string}
+        default_branch: {type: string}
+        language: {type: string, nullable: true}
+        index_status: {type: string, enum: [not_indexed, queued, indexing, indexed, stale, failed]}
+        last_indexed_at: {$ref: '#/components/schemas/Timestamp', nullable: true}
+    RepositoryList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Repository'}}
+        next_cursor: {type: string, nullable: true}
+    CreateRepositoryRequest:
+      type: object
+      required: [remote_url]
+      properties:
+        remote_url: {type: string, format: uri}
+        default_branch: {type: string, nullable: true}
+    IngestionJob:
+      type: object
+      required: [id, repository_id, status, progress, created_at, updated_at]
+      properties:
+        id: {type: string}
+        repository_id: {type: string}
+        status: {type: string, enum: [pending, running, completed, failed, cancelled]}
+        progress: {type: number, minimum: 0, maximum: 1, nullable: true, description: Only present when measured; do not infer percentages from stages.}
+        stage: {type: string, nullable: true}
+        error: {$ref: '#/components/schemas/Error', nullable: true}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        updated_at: {$ref: '#/components/schemas/Timestamp'}
+    QuestionRequest:
+      type: object
+      required: [question]
+      properties:
+        question: {type: string, minLength: 1, maxLength: 2000}
+        entity_ids: {type: array, items: {type: string}}
+    Evidence:
+      type: object
+      required: [evidence_id, repository_id, source_type, source_id, provenance, content_hash]
+      properties:
+        evidence_id: {type: string}
+        repository_id: {type: string}
+        source_id: {type: string}
+        source_type: {$ref: '#/components/schemas/SourceType'}
+        title: {type: string, nullable: true}
+        summary: {type: string, nullable: true, description: Derived summary only; never treated as original source text.}
+        excerpt: {type: string, nullable: true}
+        excerpt_origin: {type: string, enum: [original, derived], nullable: true}
+        source_url: {type: string, format: uri, nullable: true}
+        observed_at: {$ref: '#/components/schemas/Timestamp', nullable: true}
+        author: {type: string, nullable: true}
+        changed_files: {type: array, items: {$ref: '#/components/schemas/FileChange'}}
+        interpretations: {type: array, items: {$ref: '#/components/schemas/Interpretation'}}
+        provenance: {$ref: '#/components/schemas/Provenance'}
+        content_hash: {type: string}
+    EvidenceList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Evidence'}}
+        next_cursor: {type: string, nullable: true}
+    LineRange:
+      type: object
+      required: [start, end]
+      properties:
+        start: {type: integer, minimum: 1}
+        end: {type: integer, minimum: 1}
+    FileChange:
+      type: object
+      required: [path, status, line_ranges]
+      properties:
+        path: {type: string}
+        previous_path: {type: string, nullable: true}
+        status: {type: string, enum: [added, modified, deleted, renamed, binary, unknown]}
+        additions: {type: integer, nullable: true}
+        deletions: {type: integer, nullable: true}
+        line_ranges: {type: array, items: {$ref: '#/components/schemas/LineRange'}}
+    Interpretation:
+      type: object
+      required: [text, kind, basis_evidence_ids]
+      properties:
+        text: {type: string}
+        kind: {type: string, enum: [inferred, machine_extracted]}
+        basis_evidence_ids: {type: array, items: {type: string}}
+    Provenance:
+      type: object
+      required: [source_type, source_id, repository_id, raw_source_ref, ingested_at, normalizer_version, parent_source_ids]
+      properties:
+        source_type: {$ref: '#/components/schemas/SourceType'}
+        source_id: {type: string}
+        repository_id: {type: string}
+        raw_source_ref: {type: string}
+        ingested_at: {$ref: '#/components/schemas/Timestamp'}
+        normalizer_version: {type: string}
+        parent_source_ids: {type: array, items: {type: string}}
+    CodeEntity:
+      type: object
+      required: [id, kind, name]
+      properties:
+        id: {type: string}
+        kind: {type: string, enum: [file, function, class, module, configuration]}
+        name: {type: string}
+        path: {type: string, nullable: true}
+        line_start: {type: integer, minimum: 1, nullable: true}
+        line_end: {type: integer, minimum: 1, nullable: true}
+    Decision:
+      type: object
+      required: [id, title, summary, status, observed_at, evidence_ids]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        summary: {type: string}
+        status: {type: string, enum: [current, superseded, unresolved]}
+        observed_at: {$ref: '#/components/schemas/Timestamp'}
+        supersedes_id: {type: string, nullable: true}
+        evidence_ids: {type: array, items: {type: string}}
+    DecisionCandidate:
+      type: object
+      required: [decision_id, repository_id, statement, status, evidence_kind, evidence_ids, affected_paths, configuration_keys, source_type, source_id]
+      properties:
+        decision_id: {type: string}
+        repository_id: {type: string}
+        statement: {type: string}
+        status: {type: string, enum: [candidate, confirmed, superseded, unresolved, conflicting]}
+        evidence_kind: {type: string, enum: [explicit, inferred]}
+        evidence_ids: {type: array, items: {type: string}}
+        affected_paths: {type: array, items: {type: string}}
+        configuration_keys: {type: array, items: {type: string}}
+        observed_at: {$ref: '#/components/schemas/Timestamp', nullable: true}
+        source_type: {type: string}
+        source_id: {type: string}
+    SupersessionAssessment:
+      type: object
+      required: [assessment_id, repository_id, newer_decision_id, older_decision_id, status, evidence_ids, rationale, same_behavior]
+      properties:
+        assessment_id: {type: string}
+        repository_id: {type: string}
+        newer_decision_id: {type: string}
+        older_decision_id: {type: string}
+        status: {type: string, enum: [confirmed, uncertain, rejected]}
+        evidence_ids: {type: array, items: {type: string}}
+        rationale: {type: string}
+        same_behavior: {type: boolean}
+    DecisionList:
+      type: object
+      required: [repository_id, items, supersessions, warnings]
+      properties:
+        repository_id: {type: string}
+        items: {type: array, items: {$ref: '#/components/schemas/DecisionCandidate'}}
+        supersessions: {type: array, items: {$ref: '#/components/schemas/SupersessionAssessment'}}
+        warnings: {type: array, items: {type: string}}
+    Answer:
+      type: object
+      required: [id, question, answer, status, evidence_ids, conflicts, evidence_facts, claims, created_at]
+      properties:
+        id: {type: string}
+        question: {type: string}
+        answer: {type: string}
+        status: {$ref: '#/components/schemas/AnswerStatus'}
+        evidence_ids: {type: array, items: {type: string}}
+        conflicts: {type: array, items: {type: string}}
+        evidence_facts: {type: array, items: {type: string}}
+        interpretation: {type: string, nullable: true}
+        claims: {type: array, items: {$ref: '#/components/schemas/CandidateClaim'}}
+        model: {type: string, nullable: true}
+        retrieval: {$ref: '#/components/schemas/RetrievalResult', nullable: true}
+        verification: {$ref: '#/components/schemas/VerificationReport', nullable: true}
+        warnings: {type: array, items: {type: string}}
+    CandidateClaim:
+      type: object
+      required: [text, evidence_ids]
+      properties:
+        text: {type: string}
+        evidence_ids: {type: array, items: {type: string}}
+    VerificationReport:
+      type: object
+      required: [status, claims, cited_evidence_ids, sources, warnings, uncertainties, mechanically_verified]
+      properties:
+        status: {$ref: '#/components/schemas/AnswerStatus'}
+        claims: {type: array, items: {$ref: '#/components/schemas/VerifiedClaim'}}
+        cited_evidence_ids: {type: array, items: {type: string}}
+        sources: {type: array, items: {$ref: '#/components/schemas/VerifiedSource'}}
+        warnings: {type: array, items: {type: string}}
+        uncertainties: {type: array, items: {type: string}}
+        mechanically_verified: {type: boolean}
+    VerifiedClaim:
+      type: object
+      required: [text, evidence_ids, support, warnings]
+      properties:
+        text: {type: string}
+        evidence_ids: {type: array, items: {type: string}}
+        support: {type: string, enum: [supported, unsupported, uncertain, conflicting]}
+        warnings: {type: array, items: {type: string}}
+    VerifiedSource:
+      type: object
+      required: [evidence_id, source_type]
+      properties:
+        evidence_id: {type: string}
+        source_type: {type: string}
+        title: {type: string, nullable: true}
+        source_url: {type: string, format: uri, nullable: true}
+        observed_at: {$ref: '#/components/schemas/Timestamp', nullable: true}
+    RetrievalResult:
+      type: object
+      required: [repository_id, question, normalized_question, intent, status, hits, graph_paths, warnings, diagnostics]
+      properties:
+        repository_id: {type: string}
+        question: {type: string}
+        normalized_question: {type: string}
+        intent: {type: string, enum: [why, what_changed, current, support, unknown]}
+        status: {type: string, enum: [found, insufficient, conflicting]}
+        hits: {type: array, items: {$ref: '#/components/schemas/RetrievalHit'}}
+        graph_paths: {type: array, items: {$ref: '#/components/schemas/GraphPath'}}
+        warnings: {type: array, items: {type: string}}
+        diagnostics: {type: object, additionalProperties: {type: integer}, description: "Counts and limits. Semantic fields are present only when semantic retrieval is configured."}
+    RetrievalHit:
+      type: object
+      required: [evidence_id, score, rank, signals, matched_terms, source_type, graph_paths]
+      properties:
+        evidence_id: {type: string}
+        score: {type: number, minimum: 0, description: Transparent ranking score, not probability.}
+        rank: {type: integer, minimum: 1}
+        signals: {type: object, additionalProperties: {type: number}}
+        matched_terms: {type: array, items: {type: string}}
+        title: {type: string, nullable: true}
+        source_type: {type: string}
+        observed_at: {$ref: '#/components/schemas/Timestamp', nullable: true}
+        source_url: {type: string, format: uri, nullable: true}
+        excerpt: {type: string, nullable: true}
+        graph_paths: {type: array, items: {$ref: '#/components/schemas/GraphPath'}}
+    GraphPath:
+      type: object
+      required: [nodes, relationships]
+      properties:
+        nodes: {type: array, items: {$ref: '#/components/schemas/GraphPathNode'}}
+        relationships: {type: array, items: {type: string}}
+    GraphPathNode:
+      type: object
+      required: [id, label, node_type]
+      properties:
+        id: {type: string}
+        label: {type: string}
+        node_type: {type: string}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+    Graph:
+      type: object
+      required: [repository_id, nodes, edges, available, truncated, warnings]
+      properties:
+        repository_id: {type: string}
+        nodes: {type: array, items: {$ref: '#/components/schemas/GraphNode'}}
+        edges: {type: array, items: {$ref: '#/components/schemas/GraphEdge'}}
+        available: {type: boolean}
+        truncated: {type: boolean}
+        warnings: {type: array, items: {type: string}}
+    GraphNode:
+      type: object
+      required: [id, repository_id, node_type, label, metadata, source_ids]
+      properties:
+        id: {type: string}
+        repository_id: {type: string}
+        node_type: {type: string, enum: [repository, file, code_entity, configuration_key, commit, pull_request, issue, discussion, comment, documentation, incident, decision_record, code_change, code_excerpt, evidence, decision, person]}
+        label: {type: string}
+        metadata: {type: object, additionalProperties: true}
+        source_ids: {type: array, items: {type: string}}
+    GraphEdge:
+      type: object
+      required: [id, repository_id, source, target, relationship_type, evidence_ids, metadata]
+      properties:
+        id: {type: string}
+        repository_id: {type: string}
+        source: {type: string}
+        target: {type: string}
+        relationship_type: {type: string, enum: [CONTAINS, MODIFIED_BY, REFERENCES, DISCUSSED_IN, SUPPORTED_BY, AFFECTS, SUPERSEDES, RELATED_TO]}
+        evidence_ids: {type: array, items: {type: string}}
+        metadata: {type: object, additionalProperties: true}
+    TimelineList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/TimelineEntry'}}
+        next_cursor: {type: string, nullable: true}
+    TimelineEntry:
+      type: object
+      required: [id, observed_at, decision_id, evidence_ids]
+      properties:
+        id: {type: string}
+        observed_at: {$ref: '#/components/schemas/Timestamp'}
+        decision_id: {type: string}
+        evidence_ids: {type: array, items: {type: string}}
+        change_summary: {type: string}
+    Error:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        request_id: {type: string}
+        details: {type: object, additionalProperties: true}
